@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ru" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>My Project Hub</title>
+  
+  <!-- PWA iOS Metas -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Projects">
+  <link rel="apple-touch-icon" href="https://fav.farm/🚀">
+
+  <!-- Tailwind CSS & JSZip -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: { 500: '#6366f1', 600: '#4f46e5' }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { -webkit-tap-highlight-color: transparent; }
+    .glass { background: rgba(255, 255, 255, 0.03); backdrop-filter: blur(10px); }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans antialiased">
+
+  <!-- Header -->
+  <header class="border-b border-slate-800/80 sticky top-0 z-30 bg-slate-950/80 backdrop-blur-md">
+    <div class="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <span class="text-2xl">🚀</span>
+        <h1 class="text-xl font-bold tracking-tight bg-gradient-to-r from-white to-slate-400 bg-clip-text text-transparent">Project Hub</h1>
+      </div>
+      <label for="fileInput" class="cursor-pointer px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-sm font-medium transition duration-200 shadow-lg shadow-brand-500/20 active:scale-95 flex items-center gap-2">
+        <span>+ Добавить проект</span>
+      </label>
+      <input type="file" id="fileInput" accept=".zip,.html" class="hidden" multiple onchange="handleFileSelect(event)">
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="flex-1 max-w-6xl w-full mx-auto p-4 md:p-6 flex flex-col gap-6">
+
+    <!-- Drag and Drop Zone -->
+    <div id="dropZone" class="border-2 border-dashed border-slate-800 hover:border-brand-500/50 rounded-2xl p-6 text-center transition duration-200 glass flex flex-col items-center justify-center gap-2 group cursor-pointer" onclick="document.getElementById('fileInput').click()">
+      <div class="w-12 h-12 rounded-full bg-slate-900 flex items-center justify-center text-xl text-slate-400 group-hover:scale-110 transition duration-200">📦</div>
+      <p class="text-sm font-medium text-slate-300">Перетащите сюда `.zip` с проектом или `.html` файл</p>
+      <p class="text-xs text-slate-500">Архив автоматически распакуется и создаст карточку</p>
+    </div>
+
+    <!-- Projects Grid -->
+    <div id="projectsGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <!-- Cards rendered via JS -->
+    </div>
+
+    <!-- Empty State -->
+    <div id="emptyState" class="hidden text-center py-12">
+      <p class="text-slate-500 text-sm">Проектов пока нет. Загрузите свой первый проект!</p>
+    </div>
+  </main>
+
+  <!-- Project Viewer Modal -->
+  <div id="viewerModal" class="fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-md hidden flex-col">
+    <div class="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900">
+      <h3 id="modalTitle" class="font-semibold text-slate-200 text-sm truncate">Название проекта</h3>
+      <div class="flex items-center gap-2">
+        <button onclick="toggleFullscreen()" class="px-3 py-1 bg-slate-800 text-xs rounded-lg text-slate-300 hover:bg-slate-700">На весь экран</button>
+        <button onclick="closeViewer()" class="px-3 py-1 bg-red-500/20 text-red-400 text-xs rounded-lg hover:bg-red-500/30">Закрыть</button>
+      </div>
+    </div>
+    <iframe id="projectIframe" class="w-full flex-1 border-none bg-white"></iframe>
+  </div>
+
+  <script>
+    let projects = JSON.parse(localStorage.getItem('hub_projects') || '[]');
+
+    document.addEventListener('DOMContentLoaded', renderProjects);
+
+    // Drag & Drop handlers
+    const dropZone = document.getElementById('dropZone');
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+      dropZone.addEventListener(eventName, e => { e.preventDefault(); e.stopPropagation(); }, false);
+    });
+    dropZone.addEventListener('drop', e => {
+      const files = e.dataTransfer.files;
+      if (files.length) processFiles(files);
+    });
+
+    function handleFileSelect(e) {
+      if (e.target.files.length) processFiles(e.target.files);
+    }
+
+    async function processFiles(files) {
+      for (let file of files) {
+        if (file.name.endsWith('.html')) {
+          const text = await file.text();
+          saveProject(file.name.replace('.html', ''), text);
+        } else if (file.name.endsWith('.zip')) {
+          await processZip(file);
+        }
+      }
+    }
+
+    async function processZip(file) {
+      try {
+        const zip = await JSZip.loadAsync(file);
+        let indexFile = zip.file('index.html');
+        
+        if (!indexFile) {
+          const files = Object.keys(zip.files);
+          const found = files.find(f => f.endsWith('index.html'));
+          if (found) indexFile = zip.file(found);
+        }
+
+        if (!indexFile) {
+          alert('В архиве не найден файл index.html!');
+          return;
+        }
+
+        const htmlContent = await indexFile.async('string');
+        const projName = file.name.replace('.zip', '');
+        saveProject(projName, htmlContent);
+      } catch (err) {
+        alert('Ошибка при чтении ZIP архива: ' + err.message);
+      }
+    }
+
+    function saveProject(name, htmlContent) {
+      const newProj = {
+        id: Date.now().toString(),
+        title: name,
+        date: new Date().toLocaleDateString('ru-RU'),
+        content: htmlContent
+      };
+      projects.unshift(newProj);
+      try {
+        localStorage.setItem('hub_projects', JSON.stringify(projects));
+        renderProjects();
+      } catch(e) {
+        alert('Превышен лимит памяти браузера.');
+      }
+    }
+
+    function renderProjects() {
+      const grid = document.getElementById('projectsGrid');
+      const empty = document.getElementById('emptyState');
+      grid.innerHTML = '';
+
+      if (projects.length === 0) {
+        empty.classList.remove('hidden');
+        return;
+      }
+      empty.classList.add('hidden');
+
+      projects.forEach(p => {
+        const card = document.createElement('div');
+        card.className = 'glass border border-slate-800/80 hover:border-slate-700 rounded-2xl p-5 flex flex-col justify-between gap-4 transition duration-200 group';
+        card.innerHTML = `
+          <div>
+            <div class="flex items-start justify-between">
+              <h3 class="font-bold text-slate-100 group-hover:text-brand-500 transition">${p.title}</h3>
+              <button onclick="deleteProject('${p.id}')" class="text-slate-600 hover:text-red-400 text-sm">✕</button>
+            </div>
+            <p class="text-xs text-slate-500 mt-1">Добавлен: ${p.date}</p>
+          </div>
+          <button onclick="openProject('${p.id}')" class="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold transition">
+            Запустить проект
+          </button>
+        `;
+        grid.appendChild(card);
+      });
+    }
+
+    function openProject(id) {
+      const proj = projects.find(p => p.id === id);
+      if (!proj) return;
+
+      const modal = document.getElementById('viewerModal');
+      const iframe = document.getElementById('projectIframe');
+      document.getElementById('modalTitle').textContent = proj.title;
+
+      const blob = new Blob([proj.content], { type: 'text/html' });
+      iframe.src = URL.createObjectURL(blob);
+
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+    }
+
+    function closeViewer() {
+      const modal = document.getElementById('viewerModal');
+      const iframe = document.getElementById('projectIframe');
+      iframe.src = '';
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    }
+
+    function deleteProject(id) {
+      if (confirm('Удалить проект?')) {
+        projects = projects.filter(p => p.id !== id);
+        localStorage.setItem('hub_projects', JSON.stringify(projects));
+        renderProjects();
+      }
+    }
+
+    function toggleFullscreen() {
+      const iframe = document.getElementById('projectIframe');
+      if (iframe.requestFullscreen) iframe.requestFullscreen();
+    }
+  </script>
+</body>
+</html>
